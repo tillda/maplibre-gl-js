@@ -19,6 +19,7 @@ import {Evented, type ErrorEvent, Event, type Listener} from './util/evented';
 import {type AddProtocolAction, config} from './util/config';
 import {rtlMainThreadPluginFactory} from './source/rtl_text_plugin_main_thread';
 import {now, setNow, restoreNow, isTimeFrozen} from './util/time_control';
+import {setTimingEnabled, isTimingEnabled} from './util/x_timing';
 import {WorkerPool} from './util/worker_pool';
 import {prewarm, clearPrewarmedResources} from './util/global_worker_pool';
 import {AJAXError, type ExpiryData, type GetResourceResponse, type RequestParameters} from './util/ajax';
@@ -385,5 +386,7 @@ export {
     restoreNow,
     isTimeFrozen,
     getGlobalDispatcher,
+    setTimingEnabled,
+    isTimingEnabled,
     EXTENT
 };

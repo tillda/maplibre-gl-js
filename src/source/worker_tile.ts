@@ -24,6 +24,7 @@ import type {PromoteIdSpecification} from '@maplibre/maplibre-gl-style-spec';
 import type {VectorTileLike} from '@maplibre/vt-pbf';
 import {type GetDashesResponse, MessageType, type GetGlyphsResponse, type GetImagesResponse} from '../util/actor_messages';
 import type {SubdivisionGranularitySetting} from '../render/subdivision_granularity_settings';
+import {XT_WORKER_BUILD, xtFormat, xtNextPid, xtNow} from '../util/x_timing';
 export class WorkerTile {
     tileID: OverscaledTileID;
     uid: string | number;
@@ -64,6 +65,18 @@ export class WorkerTile {
         this.status = 'parsing';
         this.data = data;
 
+        // xplatform timing (see util/x_timing.ts): accumulate per-phase durations
+        // of the call-parents that loop over every feature, then emit one line per
+        // phase at the end. Guarded by XT_WORKER_BUILD so it compiles out cleanly.
+        const xt = XT_WORKER_BUILD;
+        const xtT0 = xt ? xtNow() : 0;
+        let xtLayers = 0;
+        let xtFeats = 0;
+        let xtFeatMs = 0;
+        let xtPopMs = 0;
+        let xtDepsMs = 0;
+        let xtSymMs = 0;
+
         this.collisionBoxArray = new CollisionBoxArray();
         const sourceLayerCoder = new DictionaryCoder(Object.keys(data.layers).sort());
 
@@ -94,12 +107,20 @@ export class WorkerTile {
                     'does not use vector tile spec v2 and therefore may have some rendering errors.');
             }
 
+            xtLayers++;
             const sourceLayerIndex = sourceLayerCoder.encode(sourceLayerId);
             const features = [];
+            // featureExtract: decode every feature + resolve its id (the promoteId
+            // / osm_way_id property read). The per-feature loop, timed as a whole.
+            const xtFe = xt ? xtNow() : 0;
             for (let index = 0; index < sourceLayer.length; index++) {
                 const feature = sourceLayer.feature(index);
                 const id = featureIndex.getId(feature, sourceLayerId);
                 features.push({feature, id, index, sourceLayerIndex});
+            }
+            if (xt) {
+                xtFeatMs += xtNow() - xtFe;
+                xtFeats += sourceLayer.length;
             }
 
             for (const family of layerFamilies[sourceLayerId]) {
@@ -122,7 +143,11 @@ export class WorkerTile {
                     sourceID: this.source
                 });
 
+                // populate: build geometry buffers + insert into the feature index
+                // (the spatial grid) for every feature of this layer.
+                const xtPop = xt ? xtNow() : 0;
                 bucket.populate(features, options, this.tileID.canonical);
+                if (xt) xtPopMs += xtNow() - xtPop;
                 featureIndex.bucketLayerIDs.push(family.map((l) => l.id));
             }
         }
@@ -167,11 +192,14 @@ export class WorkerTile {
             getDashesPromise = actor.sendAsync({type: MessageType.getDashes, data: {dashes}}, abortController);
         }
 
+        const xtDeps = xt ? xtNow() : 0;
         const [glyphMap, iconMap, patternMap, dashPositions] = await Promise.all([getGlyphsPromise, getIconsPromise, getPatternsPromise, getDashesPromise]);
+        if (xt) xtDepsMs = xtNow() - xtDeps;
 
         const glyphAtlas = new GlyphAtlas(glyphMap);
         const imageAtlas = new ImageAtlas(iconMap, patternMap);
 
+        const xtSym = xt ? xtNow() : 0;
         for (const key in buckets) {
             const bucket = buckets[key];
             if (bucket instanceof SymbolBucket) {
@@ -192,6 +220,26 @@ export class WorkerTile {
             }
         }
 
+        if (xt) xtSymMs = xtNow() - xtSym;
+
+        // Build one TIMING line per phase. featureExtract + populate + awaitDeps +
+        // symbolLayout won't sum exactly to the umbrella — the remainder is the
+        // rest of parse (bucket creation, layer recalc, atlas build, etc.).
+        let xtiming: string[] | undefined;
+        if (xt) {
+            const c = this.tileID.canonical;
+            const base = {z: c.z, x: c.x, y: c.y, pid: xtNextPid()};
+            const file = 'worker_tile.ts';
+            const buckets_ = Object.keys(buckets).length;
+            xtiming = [
+                xtFormat(file, 'WorkerTile.parse', {...base, layers: xtLayers, feats: xtFeats, buckets: buckets_}, xtNow() - xtT0),
+                xtFormat(file, 'parse.featureExtract', {...base, feats: xtFeats}, xtFeatMs),
+                xtFormat(file, 'parse.populate', {...base, buckets: buckets_}, xtPopMs),
+                xtFormat(file, 'parse.awaitDeps', {...base}, xtDepsMs),
+                xtFormat(file, 'parse.symbolLayout', {...base}, xtSymMs),
+            ];
+        }
+
         this.status = 'done';
         return {
             buckets: Object.values(buckets).filter(b => !b.isEmpty()),
@@ -200,6 +248,7 @@ export class WorkerTile {
             glyphAtlasImage: glyphAtlas.image,
             imageAtlas,
             dashPositions,
+            xtiming,
             // Only used for benchmarking:
             glyphMap: this.returnDependencies ? glyphMap : null,
             iconMap: this.returnDependencies ? iconMap : null,

@@ -6,6 +6,7 @@ import {TileBounds} from '../tile/tile_bounds';
 import {ResourceType} from '../util/request_manager';
 import {MessageType} from '../util/actor_messages';
 import {isAbortError} from '../util/abort_error';
+import {xtEmitLines} from '../util/x_timing';
 
 import type {Source} from './source';
 import type {OverscaledTileID} from '../tile/tile_id';
@@ -276,6 +277,11 @@ export class VectorTileSource extends Evented implements Source {
     }
 
     private _afterTileLoadWorkerResponse(tile: Tile, data: WorkerTileResult) {
+        // xplatform: forward worker-built timing lines to the global sink.
+        if (data && 'xtiming' in data) {
+            xtEmitLines(data.xtiming);
+        }
+
         if (data?.resourceTiming) {
             tile.resourceTiming = data.resourceTiming;
         }

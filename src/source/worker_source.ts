@@ -93,6 +93,8 @@ export type WorkerTileWithData = ExpiryData & {
     } | null;
     glyphPositions?: GlyphPositions | null;
     etagUnmodified?: false;
+    /** xplatform: per-phase timing lines built in the worker (see util/x_timing.ts). */
+    xtiming?: string[];
 };
 
 export type WorkerTileWithoutData = ExpiryData & {
