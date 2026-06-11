@@ -10,6 +10,7 @@ import {now} from '../util/time_control';
 import {toEvaluationFeature} from '../data/evaluation_feature';
 import {EvaluationParameters} from '../style/evaluation_parameters';
 import {rtlMainThreadPluginFactory} from '../source/rtl_text_plugin_main_thread';
+import {xtActive, xtEmit, xtNow} from '../util/x_timing';
 
 const CLOCK_SKEW_RETRY_TIMEOUT = 30000;
 
@@ -312,10 +313,32 @@ export class Tile {
     }
 
     upload(context: Context) {
+        // xplatform timing (see util/x_timing.ts): CPU-side cost of handing this
+        // tile's buckets + atlases to WebGL (buffer/texture creation on the
+        // render thread). Runs every frame but uploads at most once per tile's
+        // data generation, so only measure when something is actually pending —
+        // the common no-op frame costs one boolean scan and zero clock reads.
+        // Note this brackets the GL *submission*, not the GPU's own execution.
+        let xtPending = false;
+        if (xtActive()) {
+            for (const id in this.buckets) {
+                if (this.buckets[id].uploadPending()) {
+                    xtPending = true;
+                    break;
+                }
+            }
+            xtPending = xtPending ||
+                !!(this.imageAtlas && !this.imageAtlas.uploaded) ||
+                !!this.glyphAtlasImage;
+        }
+        const xtT0 = xtPending ? xtNow() : 0;
+        let xtBuckets = 0;
+
         for (const id in this.buckets) {
             const bucket = this.buckets[id];
             if (bucket.uploadPending()) {
                 bucket.upload(context);
+                xtBuckets++;
             }
         }
 
@@ -328,6 +351,12 @@ export class Tile {
         if (this.glyphAtlasImage) {
             this.glyphAtlasTexture = new Texture(context, this.glyphAtlasImage, gl.ALPHA);
             this.glyphAtlasImage = null;
+        }
+
+        if (xtPending) {
+            const c = this.tileID.canonical;
+            xtEmit('tile/tile.ts', 'gpu.tileUpload',
+                {z: c.z, x: c.x, y: c.y, buckets: xtBuckets}, xtNow() - xtT0);
         }
     }
 

@@ -7,6 +7,7 @@ import {BoundedLRUCache} from '../tile/tile_cache';
 import {ensureError, extend} from '../util/util';
 import {RequestPerformance} from '../util/request_performance';
 import {VectorTileOverzoomed, sliceVectorTileLayer, toVirtualVectorTile} from './vector_tile_overzoomed';
+import {XT_WORKER_BUILD, xtEpochNow, xtFormat, xtNow} from '../util/x_timing';
 import {MLTVectorTile} from './vector_tile_mlt';
 import type {
     WorkerSource,
@@ -72,6 +73,20 @@ export class VectorTileWorkerSource implements WorkerSource {
     async loadTile(params: WorkerTileParameters): Promise<WorkerTileResult | null> {
         const {uid, overzoomParameters} = params;
 
+        // xplatform timing (see util/x_timing.ts): how long the loadTile message
+        // sat in the actor queue (cross-thread, epoch-anchored — the dominant
+        // hidden cost under a zoom-out burst), then the worker-side fetch of the
+        // tile bytes (covers the tiles:// IPC + Rust core + transfer back). Lines
+        // ride the parse result's `xtiming` like the parse spans do.
+        const xt = XT_WORKER_BUILD;
+        const xtLines: string[] = [];
+        const c = params.tileID.canonical;
+        const xtBase = {z: c.z, x: c.x, y: c.y};
+        if (xt && params.xtSentAt !== undefined) {
+            const file = 'source/vector_tile_worker_source.ts';
+            xtLines.push(xtFormat(file, 'worker.queueWait', xtBase, xtEpochNow() - params.xtSentAt));
+        }
+
         if (overzoomParameters) {
             params.request = overzoomParameters.overzoomRequest;
         }
@@ -84,7 +99,13 @@ export class VectorTileWorkerSource implements WorkerSource {
         workerTile.abort = abortController;
         try {
             // Download the tile data from the network.
+            const xtFetch = xt ? xtNow() : 0;
             const tileResponse = await getArrayBuffer(params.request, abortController);
+            if (xt) {
+                const file = 'source/vector_tile_worker_source.ts';
+                const bytes = tileResponse.data ? tileResponse.data.byteLength : 0;
+                xtLines.push(xtFormat(file, 'worker.fetch', {...xtBase, bytes}, xtNow() - xtFetch));
+            }
 
             // Tile data hasn't changed (etag support) - return an unmodified result
             if (params.etag && params.etag === tileResponse.etag) {
@@ -110,7 +131,11 @@ export class VectorTileWorkerSource implements WorkerSource {
             const parseState = {rawData, cacheControl, resourceTiming};  // Keep data so reloadTile can access if parse is canceled.
             this.tileState.setParsing(uid, parseState);
             try {
-                return await this._parseWorkerTile(workerTile, params, parseState);
+                const result = await this._parseWorkerTile(workerTile, params, parseState);
+                if (xt && xtLines.length > 0 && result) {
+                    result.xtiming = [...xtLines, ...(result.xtiming ?? [])];
+                }
+                return result;
             } finally {
                 this.tileState.clearParsing(uid);
             }

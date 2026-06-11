@@ -23,6 +23,15 @@
  */
 export const XT_WORKER_BUILD = true;
 
+/**
+ * Instrumentation build stamp. The host app's boot canary reads this off the
+ * public API (`maplibregl.XT_TIMING_BUILD`) and logs it, so a stale vendored
+ * `dist/` (one built before timing existed, or before a signpost was added)
+ * is *loud* in the timing log instead of silently dropping every `src=mlb`
+ * span. Bump when spans are added/renamed.
+ */
+export const XT_TIMING_BUILD = 2;
+
 // Whether to forward worker-built lines. The REAL gate is the presence of the
 // global sink (`globalThis.__xtimingEmit`), which the host app installs only when
 // timing is on — so this defaults true and emission follows the sink. Kept as an
@@ -49,6 +58,18 @@ export function xtNextPid(): number {
 /** Real wall-clock for durations (not MapLibre's mockable `now`). */
 export function xtNow(): number {
     return performance.now();
+}
+
+/**
+ * Epoch-anchored wall-clock, comparable ACROSS contexts (main thread vs each
+ * worker — every `performance.now()` has its own origin, so raw values from two
+ * threads must never be subtracted). Used to measure the actor-queue wait: the
+ * main thread stamps the send (`xtSentAt` on the worker params), the worker
+ * subtracts on receipt. Same machine, so clock-domain skew is sub-ms — fine for
+ * the tens-to-thousands-of-ms waits this exists to expose.
+ */
+export function xtEpochNow(): number {
+    return performance.timeOrigin + performance.now();
 }
 
 /** Build one unified timing line matching the xplatform `TIMING …` format. */
@@ -80,4 +101,24 @@ export function xtEmitLines(lines: string[] | undefined): void {
     for (const line of lines) {
         sink(line);
     }
+}
+
+/**
+ * Whether emission is live right now (enabled AND the host sink is installed).
+ * Main-thread producers (`main.ingest`, `gpu.tileUpload`) use this as their
+ * before-measuring gate so disabled timing costs zero `performance.now()` calls.
+ */
+export function xtActive(): boolean {
+    return emitEnabled &&
+        (globalThis as {__xtimingEmit?: unknown}).__xtimingEmit !== undefined;
+}
+
+/** Main thread: build one completed-span line and push it to the sink. */
+export function xtEmit(
+    file: string,
+    fn: string,
+    tags: Record<string, string | number>,
+    ms: number,
+): void {
+    xtEmitLines([xtFormat(file, fn, tags, ms)]);
 }

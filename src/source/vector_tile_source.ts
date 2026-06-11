@@ -6,7 +6,7 @@ import {TileBounds} from '../tile/tile_bounds';
 import {ResourceType} from '../util/request_manager';
 import {MessageType} from '../util/actor_messages';
 import {isAbortError} from '../util/abort_error';
-import {xtEmitLines} from '../util/x_timing';
+import {xtActive, xtEmit, xtEmitLines, xtEpochNow, xtNow} from '../util/x_timing';
 
 import type {Source} from './source';
 import type {OverscaledTileID} from '../tile/tile_id';
@@ -221,6 +221,11 @@ export class VectorTileSource extends Evented implements Source {
             etag: tile.etag
         };
         params.request.collectResourceTiming = this._collectResourceTiming;
+        // xplatform: stamp the send so the worker can report the actor-queue
+        // wait (see worker.queueWait in vector_tile_worker_source.ts).
+        if (xtActive()) {
+            params.xtSentAt = xtEpochNow();
+        }
         let messageType: MessageType.loadTile | MessageType.reloadTile = MessageType.reloadTile;
         if (!tile.actor || tile.state === 'expired') {
             tile.actor = this.dispatcher.getActor();
@@ -291,7 +296,17 @@ export class VectorTileSource extends Evented implements Source {
         }
         tile.etag = data?.etag;
 
+        // xplatform: main-thread ingest — deserializing the worker's buckets +
+        // feature index into the Tile (blocks the UI thread; the last CPU step
+        // before GPU upload). See util/x_timing.ts.
+        const xt = xtActive();
+        const xtT0 = xt ? xtNow() : 0;
         tile.loadVectorData(data, this.map.painter);
+        if (xt) {
+            const c = tile.tileID.canonical;
+            xtEmit('source/vector_tile_source.ts', 'main.ingest',
+                {z: c.z, x: c.x, y: c.y}, xtNow() - xtT0);
+        }
 
         if (tile.reloadPromise) {
             const reloadPromise = tile.reloadPromise;

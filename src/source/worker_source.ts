@@ -47,6 +47,12 @@ export type WorkerTileParameters = TileParameters & {
      */
     overzoomParameters?: OverzoomParameters;
     etag?: string;
+    /**
+     * xplatform: epoch-ms send timestamp (`xtEpochNow()`), stamped by the main
+     * thread just before the actor message goes out. The worker subtracts on
+     * receipt to measure the actor-queue wait (see util/x_timing.ts).
+     */
+    xtSentAt?: number;
 };
 
 /**
@@ -100,6 +106,8 @@ export type WorkerTileWithData = ExpiryData & {
 export type WorkerTileWithoutData = ExpiryData & {
     etagUnmodified: true;  // Strict for type narrowing
     resourceTiming?: PerformanceResourceTiming[];
+    /** xplatform: per-phase timing lines built in the worker (see util/x_timing.ts). */
+    xtiming?: string[];
 };
 
 export type WorkerTileResult = WorkerTileWithData | WorkerTileWithoutData;
