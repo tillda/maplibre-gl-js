@@ -72,7 +72,22 @@ export function xtEpochNow(): number {
     return performance.timeOrigin + performance.now();
 }
 
-/** Build one unified timing line matching the xplatform `TIMING …` format. */
+/**
+ * Tag values must never contain whitespace or `=` — the consumer splits on
+ * whitespace and on the first `=`, and a `\n` would split the host's IPC
+ * batch. Runs of offending characters collapse to one `_` (same rule in all
+ * three producers; see docs/timing.md §3 in the app repo).
+ */
+export function xtSanitizeTagValue(v: string | number): string {
+    return String(v).replace(/[\s=]+/g, '_');
+}
+
+/**
+ * Build one unified timing line matching the xplatform `TIMING …` grammar
+ * (normative: docs/timing.md §3 in the app repo; this builder is
+ * conformance-tested against the app's docs/timing-corpus.jsonl). mlb lines
+ * are completed spans only — no `BEGIN|END id=` marker, by design.
+ */
 export function xtFormat(
     file: string,
     fn: string,
@@ -81,7 +96,7 @@ export function xtFormat(
 ): string {
     let out = `TIMING ${file} # ${fn} src=mlb`;
     for (const k in tags) {
-        out += ` ${k}=${tags[k]}`;
+        out += ` ${k}=${xtSanitizeTagValue(tags[k])}`;
     }
     return `${out} TIME: ${Math.round(ms)}ms`;
 }
