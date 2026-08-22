@@ -3,7 +3,7 @@ import {type Color, supportsPropertyExpression} from '@maplibre/maplibre-gl-styl
 import {register} from '../util/web_worker_transfer';
 import {PossiblyEvaluatedPropertyValue} from '../style/properties';
 import {StructArrayLayout1f4, StructArrayLayout2f8, StructArrayLayout4f16, PatternLayoutArray, DashLayoutArray} from './array_types.g';
-import {clamp} from '../util/util';
+import {clamp, warnOnce} from '../util/util';
 import {patternAttributes} from './bucket/pattern_attributes';
 import {dashAttributes} from './bucket/dash_attributes';
 import {EvaluationParameters} from '../style/evaluation_parameters';
@@ -581,6 +581,17 @@ export class ProgramConfiguration {
                          binder instanceof CrossFadedBinder) && binder.expression.isStateDependent === true) {
                         //AHM: Remove after https://github.com/mapbox/mapbox-gl-js/issues/6255
                         const value = (layer.paint as any).get(property);
+                        // The layer was restyled after this tile was parsed: the property holds a
+                        // plain constant now, which has no `evaluate`, and this binder — built for
+                        // the previous, state-dependent expression — is stale. The style change has
+                        // already queued a reparse that rebuilds it, so skip the property instead
+                        // of throwing: the throw escapes `Tile.setFeatureState`, abandoning feature
+                        // state for every remaining bucket of the tile and leaving this binder
+                        // holding a constant it can never evaluate.
+                        if (value.value.kind === 'constant') {
+                            warnOnce(`Paint property "${property}" of layer "${layer.id}" is a constant now but its buffers were built state-dependent; skipping the feature-state update until this tile is reparsed.`);
+                            continue;
+                        }
                         binder.expression = value.value;
                         binder.updatePaintArray(pos.start, pos.end, feature, featureStates[id], options);
                         dirty = true;
