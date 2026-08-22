@@ -20,6 +20,7 @@ this source.
 | Pipeline-gap timing (build 2) | as above, plus `src/tile/tile.ts` | Closes the untimed gaps between fetch, parse, and upload | Ours to keep |
 | `xtFormat` tag sanitizing | `src/util/x_timing.ts` | The `TIMING` line grammar splits on whitespace and on the first `=`; a tag value carrying either would corrupt the app's batched IPC payload | Ours to keep |
 | Feature-state crash guard | `src/data/program_configuration.ts`, `src/data/program_configuration.test.ts` | Fixes a crash on any style change while tiles are in flight; see below | Ours to carry — upstream `main` has the same bug, so a newer release will still need it |
+| Tile reload race guard | `src/source/vector_tile_source.ts`, `src/source/vector_tile_source.test.ts` | Stops a reload from being sent for a tile whose request is still in flight, which throws in the worker; see below | Ours to carry — upstream `main` has the same bug, so a newer release will still need it |
 
 ### Feature-state crash guard
 
@@ -42,15 +43,44 @@ layer and property once. `src/data/program_configuration.test.ts` pins both
 halves: state still applies for a state-dependent property, and a property the
 layer turned constant is skipped rather than thrown on.
 
+### Tile reload race guard
+
+`VectorTileSource.loadTile` decides between a `loadTile` and a `reloadTile`
+message. A `reloadTile` for a tile the worker has not finished loading throws
+`Should not be trying to reload a tile that was never loaded or has been
+removed`, and the tile is left `errored` — blank, and not retried until the next
+source-data change or viewport move.
+
+The guard against that was `tile.state === 'loading'`, which covers a first load
+but not this sequence:
+
+- A source-data change (`setTiles`, or an expiry timer) puts the tile in the
+  `expired` state, and `loadTile` re-sends it as a **full load** — a fresh
+  actor, so the worker has no loaded entry for the uid until the fetch returns.
+- A second reload — any style change touching the source, such as adding a
+  layer — reaches `TileManager._reloadTile`, which overwrites `expired` with
+  `reloading` while that load is still in flight.
+- `loadTile` now sees a state that is neither `expired` nor `loading`, and sends
+  `reloadTile` into the gap.
+
+The patch gates on `tile.abortController` as well: it is set when a request goes
+out and deleted on every response path, so it is the honest in-flight marker.
+An overlapping reload is queued behind the response through the existing
+`tile.reloadPromise`, exactly as a reload of a `loading` tile already was.
+`src/source/vector_tile_source.test.ts` pins it by holding the first response
+open and flipping the tile to `reloading` mid-flight.
+
 ## Moving to a new upstream release
 
 1. Fetch upstream: `git fetch https://github.com/maplibre/maplibre-gl-js main --tags`.
 2. Rebase this branch onto the new release tag: `git rebase <tag>`.
-3. Replay every patch in the table above — a conflict in
-   `src/data/program_configuration.ts` usually means upstream has adopted or
-   moved the fix; check before resolving it by hand.
+3. Replay every patch in the table above — a conflict in the two bug-fix
+   patches (`src/data/program_configuration.ts`, the state machine in
+   `VectorTileSource.loadTile`) usually means upstream has adopted or moved the
+   fix; check before resolving it by hand.
 4. Run the tests that pin the patches: `npx vitest run --config
-   vitest.config.unit.ts src/data/program_configuration.test.ts`.
+   vitest.config.unit.ts src/data/program_configuration.test.ts
+   src/source/vector_tile_source.test.ts`.
 5. Rebuild the app's `dist/` from the app repo: `pnpm -C client maplibre:build`.
 6. Update the **Base** line above, push this branch, and move xplatform's
    submodule pointer in the same change.

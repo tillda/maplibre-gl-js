@@ -230,7 +230,16 @@ export class VectorTileSource extends Evented implements Source {
         if (!tile.actor || tile.state === 'expired') {
             tile.actor = this.dispatcher.getActor();
             messageType = MessageType.loadTile;
-        } else if (tile.state === 'loading') {
+        } else if (tile.state === 'loading' || tile.abortController) {
+            // A request for this tile is already in flight, so the worker has no
+            // loaded entry for its uid yet and would throw on a `reloadTile`.
+            // `state === 'loading'` misses the case where the tile was sent as a
+            // full load in the 'expired' state (a source-data change, e.g.
+            // `setTiles`) and a second reload — a style change touching this
+            // source — then overwrote that state with 'reloading' mid-flight.
+            // `abortController` is the actual in-flight marker: set right below,
+            // deleted on every response path. Queue the reload behind the
+            // response instead of racing it.
             return new Promise<void>((resolve, reject) => {
                 tile.reloadPromise = {resolve, reject};
             });

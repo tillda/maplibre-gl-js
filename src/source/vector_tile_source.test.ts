@@ -348,6 +348,52 @@ describe('VectorTileSource', () => {
         await expect(initialLoadPromise).resolves.toStrictEqual({});
     });
 
+    test('queues a reload while a request is already in flight', async () => {
+        const source = createSource({
+            tiles: ['http://example.com/{z}/{x}/{y}.png']
+        });
+        const events = [];
+        let respondToFirst: (value: any) => void;
+        const firstResponse = new Promise<any>((resolve) => { respondToFirst = resolve; });
+        source.dispatcher = getWrapDispatcher()({
+            sendAsync(message) {
+                events.push(message.type);
+                return events.length === 1 ? firstResponse : Promise.resolve({});
+            }
+        });
+
+        await waitForMetadataEvent(source);
+        const tile = {
+            tileID: new OverscaledTileID(10, 0, 10, 5, 5),
+            state: 'expired',
+            loadVectorData () {
+                this.state = 'loaded';
+                events.push('tileLoaded');
+            },
+            setExpiryData() {}
+        } as any as Tile;
+
+        // A source-data change (e.g. `setTiles`) reloads an 'expired' tile as a
+        // full load.
+        const expiredLoadPromise = source.loadTile(tile);
+        await sleep(0);
+        expect(events).toEqual([MessageType.loadTile]);
+
+        // A style change reloads the same source while that load is still in
+        // flight; `TileManager._reloadTile` overwrites 'expired' with
+        // 'reloading'. Sending `reloadTile` now would throw in the worker, which
+        // has no loaded tile for this uid yet — so it must be queued.
+        tile.state = 'reloading';
+        const reloadPromise = source.loadTile(tile);
+        await sleep(0);
+        expect(events).toEqual([MessageType.loadTile]);
+
+        respondToFirst({});
+        await expiredLoadPromise;
+        await reloadPromise;
+        expect(events).toEqual([MessageType.loadTile, 'tileLoaded', MessageType.reloadTile, 'tileLoaded']);
+    });
+
     test('respects TileJSON.bounds', async () => {
         const source = createSource({
             minzoom: 0,
