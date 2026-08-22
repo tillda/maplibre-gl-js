@@ -19,7 +19,7 @@ this source.
 | Worker-side tile-parse timing | `src/util/x_timing.ts`, `src/source/worker_tile.ts`, `src/source/vector_tile_*`, `src/source/worker_source.ts`, `src/index.ts` | The heavy tile-parse work is worker-side and unhookable from the app; xplatform's `TIMING` lines need spans from inside it | Ours to keep — app-specific observability |
 | Pipeline-gap timing (build 2) | as above, plus `src/tile/tile.ts` | Closes the untimed gaps between fetch, parse, and upload | Ours to keep |
 | `xtFormat` tag sanitizing | `src/util/x_timing.ts` | The `TIMING` line grammar splits on whitespace and on the first `=`; a tag value carrying either would corrupt the app's batched IPC payload | Ours to keep |
-| Feature-state crash guard | `src/data/program_configuration.ts`, `src/data/program_configuration.test.ts` | Fixes a crash on any style change while tiles are in flight; see below | **Report and PR upstream** — the bug is in upstream `main` too |
+| Feature-state crash guard | `src/data/program_configuration.ts`, `src/data/program_configuration.test.ts` | Fixes a crash on any style change while tiles are in flight; see below | Ours to carry — upstream `main` has the same bug, so a newer release will still need it |
 
 ### Feature-state crash guard
 
