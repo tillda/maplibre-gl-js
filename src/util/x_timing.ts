@@ -30,7 +30,7 @@ export const XT_WORKER_BUILD = true;
  * is *loud* in the timing log instead of silently dropping every `src=mlb`
  * span. Bump when spans are added/renamed.
  */
-export const XT_TIMING_BUILD = 2;
+export const XT_TIMING_BUILD = 3;
 
 // Whether to forward worker-built lines. The REAL gate is the presence of the
 // global sink (`globalThis.__xtimingEmit`), which the host app installs only when

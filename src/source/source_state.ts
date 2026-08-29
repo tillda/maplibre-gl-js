@@ -1,4 +1,5 @@
 import {extend} from '../util/util';
+import {xtActive, xtNow, xtEmit} from '../util/x_timing';
 import type {Tile} from '../tile/tile';
 import type {FeatureState} from '@maplibre/maplibre-gl-style-spec';
 import type {InViewTiles} from '../tile/tile_manager_in_view_tiles';
@@ -101,7 +102,25 @@ export class SourceFeatureState {
     }
 
     initializeTileState(tile: Tile, painter: any) {
+        // xplatform: measure the full-state reapplication a tile pays on load /
+        // cache revive — it scales with the number of stored feature-state ids,
+        // not with the tile, and is otherwise invisible to timing. See
+        // util/x_timing.ts.
+        if (!xtActive()) {
+            tile.setFeatureState(this.state, painter);
+            return;
+        }
+        let ids = 0;
+        for (const sourceLayer in this.state) {
+            ids += Object.keys(this.state[sourceLayer]).length;
+        }
+        const t0 = xtNow();
         tile.setFeatureState(this.state, painter);
+        if (ids > 0) {
+            const c = tile.tileID.canonical;
+            xtEmit('source/source_state.ts', 'main.stateInit',
+                {z: c.z, x: c.x, y: c.y, ids}, xtNow() - t0);
+        }
     }
 
     coalesceChanges(inViewTiles: InViewTiles, painter: any) {
